@@ -1,0 +1,50 @@
+name: Extract YouTube Audio
+on:
+  repository_dispatch:
+    types: [extract-audio]
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+          
+      - name: Install yt-dlp
+        run: pip install yt-dlp
+        
+      - name: Extract audio
+        env:
+          VIDEO_URL: ${{ github.event.client_payload.video_url }}
+          VIDEO_TITLE: ${{ github.event.client_payload.title }}
+        run: |
+          echo "Processing: $VIDEO_TITLE"
+          yt-dlp -f 'bestaudio[ext=m4a]' --extract-audio --audio-format mp3 --output "audio.%(ext)s" "$VIDEO_URL"
+          
+      - name: Upload to temporary storage
+        id: upload
+        run: |
+          # Upload to file.io (free temporary storage)
+          RESPONSE=$(curl -s -F "file=@audio.mp3" https://file.io)
+          DOWNLOAD_URL=$(echo $RESPONSE | grep -o '"link":"[^"]*' | cut -d'"' -f4)
+          echo "download_url=$DOWNLOAD_URL" >> $GITHUB_OUTPUT
+          echo "Audio uploaded to: $DOWNLOAD_URL"
+          
+      - name: Trigger n8n webhook
+        env:
+          N8N_WEBHOOK: ${{ secrets.N8N_WEBHOOK_URL }}
+          TITLE: ${{ github.event.client_payload.title }}
+          DESCRIPTION: ${{ github.event.client_payload.description }}
+          VIDEO_URL: ${{ github.event.client_payload.video_url }}
+          AUDIO_URL: ${{ steps.upload.outputs.download_url }}
+        run: |
+          curl -X POST "$N8N_WEBHOOK" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"title\": \"$TITLE\",
+              \"description\": \"$DESCRIPTION\",
+              \"video_url\": \"$VIDEO_URL\",
+              \"audio_url\": \"$AUDIO_URL\"
+            }"
