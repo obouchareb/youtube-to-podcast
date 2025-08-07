@@ -26,17 +26,77 @@ jobs:
         echo "Processing YouTube video: ${{ github.event.client_payload.VIDEO_TITLE }}"
         echo "YouTube URL: ${{ github.event.client_payload.VIDEO_URL }}"
         
-        # Download audio using yt-dlp with bot bypass options
-        yt-dlp \
+        # Update yt-dlp to latest version (important for YouTube compatibility)
+        pip install --upgrade yt-dlp
+        
+        YOUTUBE_URL="${{ github.event.client_payload.VIDEO_URL }}"
+        
+        echo "Attempting download with GitHub Actions optimized settings..."
+        
+        # Try with settings optimized for GitHub Actions / cloud environments
+        if yt-dlp \
           --extract-audio \
           --audio-format mp3 \
           --audio-quality 0 \
-          --output "%(title)s.%(ext)s" \
+          --output "audio_%(upload_date)s_%(id)s.%(ext)s" \
           --no-playlist \
-          --user-agent "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" \
+          --geo-bypass \
+          --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
           --extractor-args "youtube:player_client=android,web" \
-          --no-check-certificate \
-          "${{ github.event.client_payload.VIDEO_URL }}"
+          --cookies-from-browser chrome:default \
+          --ignore-errors \
+          --no-warnings \
+          "$YOUTUBE_URL" 2>&1 | tee download.log; then
+          echo "✅ Download successful!"
+        else
+          echo "❌ Primary method failed. Trying alternative approaches..."
+          
+          # Alternative 1: Different user agent and headers
+          if yt-dlp \
+            --extract-audio \
+            --audio-format mp3 \
+            --output "audio_%(upload_date)s_%(id)s.%(ext)s" \
+            --user-agent "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" \
+            --add-header "Accept-Language:en-US,en;q=0.9" \
+            --extractor-args "youtube:player_client=ios" \
+            --geo-bypass \
+            "$YOUTUBE_URL"; then
+            echo "✅ Alternative method 1 successful!"
+          # Alternative 2: Mobile client
+          elif yt-dlp \
+            --extract-audio \
+            --audio-format mp3 \
+            --output "audio_%(upload_date)s_%(id)s.%(ext)s" \
+            --user-agent "Mozilla/5.0 (iPhone; CPU iPhone OS 14_7_1 like Mac OS X)" \
+            --extractor-args "youtube:player_client=mweb" \
+            "$YOUTUBE_URL"; then
+            echo "✅ Mobile client successful!"
+          else
+            echo "⚠️ All YouTube download methods failed."
+            echo "This often happens with GitHub Actions IP ranges."
+            echo ""
+            echo "Fallback: Creating notification file instead..."
+            
+            # Create a text file with the video info for manual processing
+            cat > "FAILED_DOWNLOAD_$(date +%Y%m%d_%H%M%S).txt" << EOF
+YouTube Download Failed
+=====================
+Video URL: $YOUTUBE_URL
+Video Title: ${{ github.event.client_payload.VIDEO_TITLE }}
+Timestamp: $(date)
+Reason: GitHub Actions IP may be blocked by YouTube
+
+Manual Download Instructions:
+1. Download this video manually using any YouTube downloader
+2. Convert to MP3 format
+3. Upload directly to your Libsyn account
+
+Alternative: Try running this workflow again as YouTube blocking can be temporary.
+EOF
+            
+            echo "📄 Created instruction file for manual processing"
+          fi
+        fi
         
         # Find the downloaded file (yt-dlp creates files with video title)
         AUDIO_FILE=$(find . -name "*.mp3" -type f | head -1)
