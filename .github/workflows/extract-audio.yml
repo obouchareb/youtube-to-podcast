@@ -26,15 +26,16 @@ jobs:
         echo "Processing YouTube video: ${{ github.event.client_payload.VIDEO_TITLE }}"
         echo "YouTube URL: ${{ github.event.client_payload.VIDEO_URL }}"
         
-        # Download audio using yt-dlp
+        # Download audio using yt-dlp with bot bypass options
         yt-dlp \
           --extract-audio \
           --audio-format mp3 \
           --audio-quality 0 \
           --output "%(title)s.%(ext)s" \
           --no-playlist \
-          --embed-thumbnail \
-          --add-metadata \
+          --user-agent "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" \
+          --extractor-args "youtube:player_client=android,web" \
+          --no-check-certificate \
           "${{ github.event.client_payload.VIDEO_URL }}"
         
         # Find the downloaded file (yt-dlp creates files with video title)
