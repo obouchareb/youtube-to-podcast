@@ -12,61 +12,43 @@ jobs:
         with:
           python-version: '3.x'
           
-      - name: Install yt-dlp
-        run: pip install yt-dlp
-        
-      - name: Extract audio
+      - name: Create test audio file
         env:
-          VIDEO_URL: ${{ github.event.client_payload.video_url }}
           VIDEO_TITLE: ${{ github.event.client_payload.title }}
+          VIDEO_URL: ${{ github.event.client_payload.video_url }}
         run: |
-          echo "Processing: $VIDEO_TITLE"
-          echo "URL: $VIDEO_URL"
+          echo "Creating test audio file for: $VIDEO_TITLE"
+          echo "Original video: $VIDEO_URL"
           
-          yt-dlp \
-            --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
-            --format "bestaudio[ext=m4a]/bestaudio/best" \
-            --extract-audio \
-            --audio-format mp3 \
-            --audio-quality 192K \
-            --output "audio.%(ext)s" \
-            --no-check-certificates \
-            --ignore-errors \
-            "$VIDEO_URL"
-            
-      - name: Check audio file
-        run: |
-          if [ -f "audio.mp3" ]; then
-            echo "Audio file created successfully"
-            ls -la audio.mp3
-          else
-            echo "Looking for any audio files..."
-            find . -name "*.mp3" -o -name "*.m4a" -o -name "*.webm" | head -5
-            AUDIO_FILE=$(find . -name "*.mp3" -o -name "*.m4a" | head -n 1)
-            if [ -n "$AUDIO_FILE" ]; then
-              echo "Found: $AUDIO_FILE"
-              cp "$AUDIO_FILE" audio.mp3
-              echo "Renamed to audio.mp3"
-            else
-              echo "No audio file found"
-              exit 1
-            fi
-          fi
+          # Install ffmpeg to create a test audio file
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          
+          # Create a 10-second test audio file (sine wave tone)
+          ffmpeg -f lavfi -i "sine=frequency=440:duration=10" -acodec libmp3lame audio.mp3
+          
+          # Verify file was created
+          ls -la audio.mp3
+          echo "Test audio file created successfully"
           
       - name: Upload to file storage
         id: upload
         run: |
-          echo "Uploading audio file..."
-          RESPONSE=$(curl -s -F "file=@audio.mp3" https://file.io)
-          echo "Response: $RESPONSE"
+          echo "Uploading test audio file..."
           
+          # Upload to file.io
+          RESPONSE=$(curl -s -F "file=@audio.mp3" https://file.io)
+          echo "Upload response: $RESPONSE"
+          
+          # Extract download URL
           DOWNLOAD_URL=$(echo "$RESPONSE" | grep -o '"link":"[^"]*' | cut -d'"' -f4)
           
           if [ -n "$DOWNLOAD_URL" ]; then
             echo "download_url=$DOWNLOAD_URL" >> $GITHUB_OUTPUT
-            echo "Upload successful: $DOWNLOAD_URL"
+            echo "✅ Upload successful: $DOWNLOAD_URL"
           else
-            echo "Upload failed"
+            echo "❌ Upload failed"
+            echo "Full response: $RESPONSE"
             exit 1
           fi
           
@@ -78,10 +60,20 @@ jobs:
           VIDEO_URL: ${{ github.event.client_payload.video_url }}
           AUDIO_URL: ${{ steps.upload.outputs.download_url }}
         run: |
-          echo "Calling webhook with audio URL: $AUDIO_URL"
+          echo "🔗 Calling n8n webhook..."
+          echo "Webhook URL: $N8N_WEBHOOK"
+          echo "Audio URL: $AUDIO_URL"
+          echo "Title: $TITLE"
           
-          curl -X POST "$N8N_WEBHOOK" \
+          # Call the webhook
+          WEBHOOK_RESPONSE=$(curl -s -X POST "$N8N_WEBHOOK" \
             -H "Content-Type: application/json" \
-            -d "{\"title\":\"$TITLE\",\"description\":\"$DESCRIPTION\",\"video_url\":\"$VIDEO_URL\",\"audio_url\":\"$AUDIO_URL\"}"
+            -d "{
+              \"title\": \"$TITLE\",
+              \"description\": \"$DESCRIPTION\", 
+              \"video_url\": \"$VIDEO_URL\",
+              \"audio_url\": \"$AUDIO_URL\"
+            }")
           
-          echo "Webhook called successfully"
+          echo "✅ Webhook response: $WEBHOOK_RESPONSE"
+          echo "🎉 Workflow completed successfully!"
