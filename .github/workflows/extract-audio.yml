@@ -1,4 +1,5 @@
 name: Extract YouTube Audio
+
 on:
   repository_dispatch:
     types: [extract-audio]
@@ -6,116 +7,93 @@ on:
 jobs:
   extract:
     runs-on: ubuntu-latest
+    
     steps:
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.x'
-          
-      - name: Download and extract audio from YouTube
-        env:
-          VIDEO_TITLE: ${{ github.event.client_payload.title }}
-          VIDEO_URL: ${{ github.event.client_payload.video_url }}
-        run: |
-          echo "Processing YouTube video: $VIDEO_TITLE"
-          echo "URL: $VIDEO_URL"
-          
-          # Install required tools
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg python3-pip
-          pip3 install yt-dlp
-          
-          # Try multiple download strategies
-          echo "Attempting to download audio..."
-          
-          # Strategy 1: Basic yt-dlp
-          if yt-dlp \
-            --extract-audio \
-            --audio-format mp3 \
-            --audio-quality 192K \
-            --output "audio.%(ext)s" \
-            --no-check-certificates \
-            --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
-            "$VIDEO_URL"; then
-            echo "✅ Successfully downloaded audio"
-          else
-            echo "⚠️ Direct download failed, trying alternative method..."
-            
-            # Strategy 2: Different user agent and options
-            if yt-dlp \
-              --extract-audio \
-              --audio-format mp3 \
-              --audio-quality 192K \
-              --output "audio.%(ext)s" \
-              --no-check-certificates \
-              --user-agent "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36" \
-              --extractor-args "youtube:skip=hls,dash" \
-              "$VIDEO_URL"; then
-              echo "✅ Successfully downloaded with alternative method"
-            else
-              echo "❌ YouTube download failed, creating placeholder audio"
-              # Create a longer test audio as fallback
-              ffmpeg -f lavfi -i "sine=frequency=440:duration=60" -acodec libmp3lame audio.mp3
-              echo "📝 Created 60-second placeholder audio"
-            fi
-          fi
-          
-          # Verify audio file exists
-          if [ -f "audio.mp3" ]; then
-            echo "✅ Audio file ready: $(du -h audio.mp3)"
-          else
-            echo "❌ No audio file found"
-            exit 1
-          fi
-          
-      - name: Upload to Libsyn via FTP
-        env:
-          FTP_SERVER: ${{ secrets.LIBSYN_FTP_SERVER }}
-          FTP_USERNAME: ${{ secrets.LIBSYN_FTP_USERNAME }}
-          FTP_PASSWORD: ${{ secrets.LIBSYN_FTP_PASSWORD }}
-          SHOW_ID: ${{ secrets.LIBSYN_SHOW_ID }}
-          EPISODE_TITLE: ${{ github.event.client_payload.title }}
-        run: |
-          echo "Uploading to Libsyn FTP..."
-          echo "Episode: $EPISODE_TITLE"
-          
-          # Install FTP client
-          sudo apt-get install -y lftp
-          
-          # Create a unique filename with timestamp
-          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-          FILENAME="episode_${TIMESTAMP}.mp3"
-          
-          echo "Uploading as: $FILENAME"
-          echo "Show ID: $SHOW_ID"
-          
-          # Upload via FTP to the show directory
-          lftp -c "
-            set ftp:ssl-allow no;
-            open ftp://$FTP_USERNAME:$FTP_PASSWORD@$FTP_SERVER;
-            cd $SHOW_ID;
-            put audio.mp3 -o $FILENAME;
-            quit
-          "
-          
-          if [ $? -eq 0 ]; then
-            echo "✅ Successfully uploaded to Libsyn: $FILENAME"
-            echo "📁 Directory: $SHOW_ID"
-            echo "🎵 Episode title: $EPISODE_TITLE"
-            echo "🎉 Automation completed successfully!"
-            echo ""
-            echo "Next steps:"
-            echo "1. Go to your Libsyn dashboard"
-            echo "2. Create a new episode"
-            echo "3. Select the uploaded file: $FILENAME"
-            echo "4. Add title: $EPISODE_TITLE"
-          else
-            echo "❌ FTP upload failed"
-            exit 1
-          fi
-          
-      - name: Cleanup
-        run: |
-          echo "Cleaning up temporary files..."
-          rm -f audio.mp3
-          echo "✅ Cleanup completed"
+    - name: Set up job
+      run: echo "Starting YouTube audio extraction"
+      
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.x'
+    
+    - name: Install yt-dlp
+      run: |
+        pip install yt-dlp
+    
+    - name: Download and extract audio from YouTube
+      run: |
+        echo "Processing YouTube video: ${{ github.event.client_payload.VIDEO_TITLE }}"
+        echo "YouTube URL: ${{ github.event.client_payload.VIDEO_URL }}"
+        
+        # Download audio using yt-dlp
+        yt-dlp \
+          --extract-audio \
+          --audio-format mp3 \
+          --audio-quality 0 \
+          --output "%(title)s.%(ext)s" \
+          --no-playlist \
+          --embed-thumbnail \
+          --add-metadata \
+          "${{ github.event.client_payload.VIDEO_URL }}"
+        
+        # Find the downloaded file (yt-dlp creates files with video title)
+        AUDIO_FILE=$(find . -name "*.mp3" -type f | head -1)
+        echo "Downloaded file: $AUDIO_FILE"
+        
+        # Create a clean filename for the episode
+        CLEAN_TITLE="${{ github.event.client_payload.VIDEO_TITLE }}"
+        CLEAN_TITLE=$(echo "$CLEAN_TITLE" | sed 's/[^a-zA-Z0-9 ]//g' | sed 's/ /_/g')
+        EPISODE_FILENAME="episode_$(date +%Y%m%d_%H%M%S)_${CLEAN_TITLE}.mp3"
+        
+        # Rename the file
+        mv "$AUDIO_FILE" "$EPISODE_FILENAME"
+        
+        echo "Final filename: $EPISODE_FILENAME"
+        echo "EPISODE_FILENAME=$EPISODE_FILENAME" >> $GITHUB_ENV
+        
+        # Show file info
+        ls -la *.mp3
+        file "$EPISODE_FILENAME"
+
+    - name: Upload to Libsyn via FTP
+      run: |
+        echo "Uploading to Libsyn FTP..."
+        
+        # Install lftp for FTP operations
+        sudo apt-get update
+        sudo apt-get install -y lftp
+        
+        # Upload the file
+        lftp -c "
+        set ftp:ssl-allow no;
+        open ftp://${{ secrets.LIBSYN_FTP_USERNAME }}:${{ secrets.LIBSYN_FTP_PASSWORD }}@${{ secrets.LIBSYN_FTP_SERVER }};
+        cd /;
+        put $EPISODE_FILENAME;
+        ls -la;
+        quit
+        "
+        
+        echo "✅ Successfully uploaded to Libsyn: $EPISODE_FILENAME"
+        
+        # Show next steps
+        echo ""
+        echo "Next steps:"
+        echo "1. Go to your Libsyn dashboard" 
+        echo "2. Create a new episode"
+        echo "3. Select the uploaded file: $EPISODE_FILENAME"
+        echo "4. Add title: ${{ github.event.client_payload.VIDEO_TITLE }}"
+
+    - name: Cleanup
+      run: |
+        echo "Cleaning up temporary files..."
+        rm -f *.mp3
+        echo "✅ Cleanup completed"
+    
+    - name: Post Setup Python
+      run: |
+        echo "Post job cleanup."
+    
+    - name: Complete job
+      run: |
+        echo "Cleaning up orphan processes"
