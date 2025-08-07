@@ -28,46 +28,54 @@ jobs:
           ls -la audio.mp3
           echo "Test audio file created successfully"
           
-      - name: Upload to file storage
-        id: upload
+      - name: Upload to Libsyn via FTP
+        env:
+          FTP_SERVER: ${{ secrets.LIBSYN_FTP_SERVER }}
+          FTP_USERNAME: ${{ secrets.LIBSYN_FTP_USERNAME }}
+          FTP_PASSWORD: ${{ secrets.LIBSYN_FTP_PASSWORD }}
+          SHOW_ID: ${{ secrets.LIBSYN_SHOW_ID }}
+          EPISODE_TITLE: ${{ github.event.client_payload.title }}
         run: |
-          echo "Uploading test audio file..."
+          echo "Uploading to Libsyn FTP..."
+          echo "Episode: $EPISODE_TITLE"
           
-          # Check file exists
-          ls -la audio.mp3
-          echo "File size: $(du -h audio.mp3)"
+          # Install FTP client
+          sudo apt-get install -y lftp
           
-          # Try 0x0.st (more reliable for automated uploads)
-          echo "Uploading to 0x0.st..."
-          DOWNLOAD_URL=$(curl -s -F "file=@audio.mp3" https://0x0.st)
+          # Create a unique filename with timestamp
+          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+          FILENAME="episode_${TIMESTAMP}.mp3"
           
-          echo "Response: $DOWNLOAD_URL"
+          echo "Uploading as: $FILENAME"
+          echo "Show ID: $SHOW_ID"
           
-          # Check if we got a valid URL back
-          if [[ $DOWNLOAD_URL == https://0x0.st/* ]]; then
-            echo "download_url=$DOWNLOAD_URL" >> $GITHUB_OUTPUT
-            echo "✅ Upload successful: $DOWNLOAD_URL"
+          # Upload via FTP to the show directory
+          lftp -c "
+            set ftp:ssl-allow no;
+            open ftp://$FTP_USERNAME:$FTP_PASSWORD@$FTP_SERVER;
+            cd $SHOW_ID;
+            put audio.mp3 -o $FILENAME;
+            quit
+          "
+          
+          if [ $? -eq 0 ]; then
+            echo "✅ Successfully uploaded to Libsyn: $FILENAME"
+            echo "📁 Directory: $SHOW_ID"
+            echo "🎵 Episode title: $EPISODE_TITLE"
+            echo "🎉 Automation completed successfully!"
+            echo ""
+            echo "Next steps:"
+            echo "1. Go to your Libsyn dashboard"
+            echo "2. Create a new episode"
+            echo "3. Select the uploaded file: $FILENAME"
+            echo "4. Add title: $EPISODE_TITLE"
           else
-            echo "❌ Upload failed. Response was: $DOWNLOAD_URL"
-            # For testing, let's use a dummy URL so the webhook still gets called
-            DOWNLOAD_URL="https://example.com/test-audio.mp3"
-            echo "download_url=$DOWNLOAD_URL" >> $GITHUB_OUTPUT
-            echo "🔧 Using dummy URL for testing: $DOWNLOAD_URL"
+            echo "❌ FTP upload failed"
+            exit 1
           fi
           
-      - name: Trigger n8n webhook
-        env:
-          N8N_WEBHOOK: ${{ secrets.N8N_WEBHOOK_URL }}
-          TITLE: ${{ github.event.client_payload.title }}
-          DESCRIPTION: ${{ github.event.client_payload.description }}
-          VIDEO_URL: ${{ github.event.client_payload.video_url }}
-          AUDIO_URL: ${{ steps.upload.outputs.download_url }}
+      - name: Cleanup
         run: |
-          echo "Calling n8n webhook..."
-          echo "Audio URL: $AUDIO_URL"
-          
-          curl -s -X POST "$N8N_WEBHOOK" \
-            -H "Content-Type: application/json" \
-            -d "{\"title\":\"$TITLE\",\"description\":\"$DESCRIPTION\",\"video_url\":\"$VIDEO_URL\",\"audio_url\":\"$AUDIO_URL\"}"
-          
-          echo "Webhook called successfully"
+          echo "Cleaning up temporary files..."
+          rm -f audio.mp3
+          echo "✅ Cleanup completed"
